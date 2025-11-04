@@ -99,7 +99,7 @@ jobs:
             LDFLAGS="-L/usr/lib" 
             AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)" 
             CIBW_BUILD_VERBOSITY=1
-            CIBW_BUILD_FRONTEND="pip; args: --no-build-isolation"
+            CIBW_BUILD_FRONTEND="pip; args: --no-build-isolation -v"
             NVTE_BUILD_THREADS_PER_JOB=1
             NVTE_NO_LOCAL_VERSION=1 
             NVTE_FRAMEWORK=pytorch 
