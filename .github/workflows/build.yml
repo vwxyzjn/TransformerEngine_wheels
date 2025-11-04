@@ -65,7 +65,7 @@ jobs:
         with:
           repository: NVIDIA/TransformerEngine
           submodules: recursive
-          ref: 603dbf72e4529868bcefd68bd5f901b84093626e
+          ref: v2.8
 
       - name: Checkout utils
         uses: actions/checkout@v4
@@ -98,6 +98,8 @@ jobs:
             CFLAGS="-I/usr/include" 
             LDFLAGS="-L/usr/lib" 
             AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)" 
+            CIBW_BUILD_VERBOSITY=1
+            CIBW_BUILD_FRONTEND="pip; args: --no-build-isolation"
             NVTE_BUILD_THREADS_PER_JOB=1
             NVTE_NO_LOCAL_VERSION=1 
             NVTE_FRAMEWORK=pytorch 
