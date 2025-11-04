@@ -1,4 +1,4 @@
-name: Build manylinx wheels and deploy
+name: Build TE wheels and release
 
 permissions:
   contents: write
@@ -24,29 +24,21 @@ jobs:
             deepcompile: 1
             cibw-build: "cp312-*64"
             cibw-build-image: "pytorch/manylinux2_28-builder:cuda12.6"
-            cibw-build-cuda-version: "12.6"
             cibw-build-torch-cuda-version: "126"
-            cibw-build-cuda-compat-version: "12-6"
           - torch-version: "2.8.0"
             python-version: "3.12"
             cuda-version: "12.8.0"
             arch: "7.0;7.5;8.0;8.6;9.0;10.0;11.0;12.0+PTX"
-            deepcompile: 1
             cibw-build: "cp312-*64"
             cibw-build-image: "pytorch/manylinux2_28-builder:cuda12.8"
-            cibw-build-cuda-version: "12.8"
             cibw-build-torch-cuda-version: "128"
-            cibw-build-cuda-compat-version: "12-8"
           - torch-version: "2.8.0"
             python-version: "3.12"
             cuda-version: "12.9.0"
             arch: "7.0;7.5;8.0;8.6;9.0;10.0;11.0;12.0+PTX"
-            deepcompile: 1
             cibw-build: "cp312-*64"
             cibw-build-image: "pytorch/manylinux2_28-builder:cuda12.9"
-            cibw-build-cuda-version: "12.9"
             cibw-build-torch-cuda-version: "129"
-            cibw-build-cuda-compat-version: "12-9"
 
     steps:
       - name: Free Disk Space (Ubuntu)
@@ -60,6 +52,7 @@ jobs:
           docker-images: true
           swap-storage: true
 
+      # Checkout TE (pin to a tag that matches PyTorch 2.8; adjust if you need a different ref)
       - name: Checkout TransformerEngine
         uses: actions/checkout@v4
         with:
@@ -67,12 +60,13 @@ jobs:
           submodules: recursive
           ref: v2.8
 
-      - name: Checkout utils
+      # If you need your helper scripts (optional)
+      - name: Checkout utils (optional)
         uses: actions/checkout@v4
         with:
           path: build_scripts
 
-      - name: Set up Python
+      - name: Set up Python for cibuildwheel driver
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -82,43 +76,66 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install "cibuildwheel<3.0"
 
-      - name: Build wheels for Pytorch ${{ matrix.torch-version }} + CUDA ${{ matrix.cibw-build-torch-cuda-version }}
-        run: |
-          python3 -m cibuildwheel --output-dir dist
+      - name: Build wheels for PyTorch ${{ matrix.torch-version }} + CUDA ${{ matrix.cibw-build-torch-cuda-version }}
         env:
           CIBW_BUILD: ${{ matrix.cibw-build }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ matrix.cibw-build-image }}
+          # NO CFLAGS/LDFLAGS pointing to /usr/*
           CIBW_BEFORE_BUILD_LINUX: >
+            set -euxo pipefail &&
             echo "$(cat build_tools/VERSION.txt)+torch${{ matrix.torch-version }}cu${{ matrix.cibw-build-torch-cuda-version }}" > build_tools/VERSION.txt &&
-            python -m pip install -U pip setuptools wheel packaging auditwheel-symbols ninja cmake "numpy<2.0.0" &&
-            python -m pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu${{ matrix.cibw-build-torch-cuda-version }}
+            python -m pip install -U pip setuptools wheel packaging ninja cmake "numpy<2.0.0" &&
+            # keep auditwheel behavior stable
+            python -m pip install "auditwheel<6.0" auditwheel-symbols &&
+            # install the exact torch we want to target
+            python -m pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu${{ matrix.cibw-build-torch-cuda-version }} &&
+            # expose CMAKE_PREFIX_PATH from the pip torch we just installed
+            export CMAKE_PREFIX_PATH=$(python -c 'import torch; print(torch.utils.cmake_prefix_path)') &&
+            echo "BUILD Torch: $(python -c 'import torch; import os; print(torch.__version__, torch.version.cuda, os.path.dirname(torch.__file__))')" &&
+            echo "CMAKE_PREFIX_PATH: $CMAKE_PREFIX_PATH"
           CIBW_ENVIRONMENT: >
-            CUDA_HOME="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}" 
-            CUDACXX="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}/bin/nvcc" 
-            CFLAGS="-I/usr/include" 
-            LDFLAGS="-L/usr/lib" 
-            AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)" 
+            CUDA_HOME="/usr/local/cuda-${{ matrix.cuda-version }}"
+            CUDACXX="/usr/local/cuda-${{ matrix.cuda-version }}/bin/nvcc"
+            AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)"
             NVTE_BUILD_THREADS_PER_JOB=1
-            NVTE_NO_LOCAL_VERSION=1 
-            NVTE_FRAMEWORK=pytorch 
+            NVTE_NO_LOCAL_VERSION=1
+            NVTE_FRAMEWORK=pytorch
             MAX_JOBS=1
+            # Pass CMake the torch prefix so it won't wander to /usr
+            CMAKE_PREFIX_PATH=$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')
+            NVTE_CMAKE_ARGS="-DCMAKE_PREFIX_PATH=$(python -c 'import torch; print(torch.utils.cmake_prefix_path)') -DCMAKE_BUILD_TYPE=Release"
+            # Arch list if TE uses it (optional)
+            TORCH_CUDA_ARCH_LIST="${{ matrix.arch }}"
           CIBW_SKIP: "*musllinux*"
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w /tmp/cibuildwheel/repaired_wheel {wheel} --exclude libc10.so --exclude libc10* --exclude libtorch.so --exclude libtorch* --exclude libcu*"
-          
-      - name: Log Built Wheels
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w /tmp/cibuildwheel/repaired_wheel {wheel}
+            --exclude "libc10.so" --exclude "libc10.so.*"
+            --exclude "libtorch.so" --exclude "libtorch.so.*"
+            --exclude "libtorch_cpu.so" --exclude "libtorch_cpu.so.*"
+            --exclude "libtorch_cuda.so" --exclude "libtorch_cuda.so.*"
+            --exclude "libtorch_python.so" --exclude "libtorch_python.so.*"
+            --exclude "libcuda.so" --exclude "libcuda.so.*"
+            --exclude "libcudart.so" --exclude "libcudart.so.*"
         run: |
-          wheel_name=$(ls dist/*whl | xargs -n 1 basename)
-          echo "wheel_name=${wheel_name}" >> $GITHUB_ENV
-          ls dist
+          python3 -m cibuildwheel --output-dir dist
+
+      - name: Log Built Wheel(s)
+        run: |
+          ls -l /tmp/cibuildwheel/repaired_wheel || true
+          ls -l dist || true
+          echo "wheel_name=$(ls /tmp/cibuildwheel/repaired_wheel/*.whl 2>/dev/null | xargs -n 1 basename || ls dist/*.whl | xargs -n 1 basename)" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{env.wheel_name}}
-          path: dist/${{env.wheel_name}}
+          name: ${{ env.wheel_name }}
+          path: |
+            /tmp/cibuildwheel/repaired_wheel/*.whl
+            dist/*.whl
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            ./dist/${{env.wheel_name}}
+            /tmp/cibuildwheel/repaired_wheel/*.whl
+            dist/*.whl
