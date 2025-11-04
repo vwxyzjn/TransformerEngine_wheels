@@ -93,18 +93,16 @@ jobs:
             python -m pip install -U pip setuptools wheel packaging auditwheel-symbols ninja cmake "numpy<2.0.0" &&
             python -m pip install --no-cache-dir torch==${{ matrix.torch-version }} --index-url https://download.pytorch.org/whl/cu${{ matrix.cibw-build-torch-cuda-version }}
           CIBW_ENVIRONMENT: >
-            CUDA_HOME="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}" 
-            CUDACXX="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}/bin/nvcc" 
-            CFLAGS="-I/usr/include" 
-            LDFLAGS="-L/usr/lib" 
-            AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)" 
+            CUDA_HOME="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}"
+            CUDACXX="/usr/local/cuda-${{ matrix.cibw-build-cuda-version }}/bin/nvcc"
+            AUDITWHEEL_PLAT="manylinux_2_28_$(uname -m)"
             NVTE_BUILD_THREADS_PER_JOB=1
-            NVTE_NO_LOCAL_VERSION=1 
-            NVTE_FRAMEWORK=pytorch 
+            NVTE_NO_LOCAL_VERSION=1
+            NVTE_FRAMEWORK=pytorch
             MAX_JOBS=1
           CIBW_SKIP: "*musllinux*"
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w /tmp/cibuildwheel/repaired_wheel {wheel} --exclude libc10.so --exclude libc10* --exclude libtorch.so --exclude libtorch* --exclude libcu*"
-          
+
       - name: Log Built Wheels
         run: |
           wheel_name=$(ls dist/*whl | xargs -n 1 basename)
